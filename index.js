@@ -88,6 +88,13 @@ class GoveePlatform {
       }
 
       this.setupAccessory(accessory, device);
+
+      // Sync real device state immediately on startup
+      try {
+        await this.refreshDeviceState(accessory, device);
+      } catch (err) {
+        this.log.warn(`Could not sync initial state for ${device.deviceName}:`, err.message);
+      }
     }
 
     // Remove accessories no longer returned by the API
@@ -98,9 +105,6 @@ class GoveePlatform {
         this.accessories.delete(uuid);
       }
     }
-
-    // Fetch initial state for all devices
-    await this.pollAllDevices();
 
     // Schedule ongoing polling
     setInterval(() => this.pollAllDevices(), this.pollIntervalMs);
@@ -185,6 +189,16 @@ class GoveePlatform {
         const kelvin = Math.round(1000000 / value);
         await this.sendCommand(device, 'colorTem', kelvin);
       });
+
+    // --- Adaptive Lighting ---
+    // Lets HomeKit automatically shift color temperature throughout the day.
+    // Only configure once — context flag survives restarts.
+    if (this.api.hap.AdaptiveLightingController && !accessory.context.adaptiveLightingConfigured) {
+      const adaptiveLighting = new this.api.hap.AdaptiveLightingController(service);
+      accessory.configureController(adaptiveLighting);
+      accessory.context.adaptiveLightingConfigured = true;
+      this.log.debug('Adaptive lighting enabled for', device.deviceName);
+    }
   }
 
   // Debounce color commands so Hue + Saturation changes send one API call
