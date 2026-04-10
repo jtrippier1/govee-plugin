@@ -17,10 +17,28 @@ const MAX_MIREDS = Math.floor(1000000 / MIN_KELVIN);  // ~370
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 const DEFAULT_POLL_INTERVAL_S = 30;
+const REQUEST_INTERVAL_MS = 200; // min gap between outgoing API requests
 
 module.exports = (api) => {
   api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, GoveePlatform);
 };
+
+// Serializes API calls with a minimum interval between them to avoid rate limits.
+class ApiQueue {
+  constructor(intervalMs) {
+    this.intervalMs = intervalMs;
+    this._chain = Promise.resolve();
+  }
+
+  add(fn) {
+    const result = this._chain
+      .then(() => sleep(this.intervalMs))
+      .then(fn);
+    // Errors must not break the chain for subsequent requests
+    this._chain = result.catch(() => {});
+    return result;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Platform
@@ -40,6 +58,7 @@ class GoveePlatform {
 
     this.apiKey = config.apiKey;
     this.pollIntervalMs = (config.pollInterval || DEFAULT_POLL_INTERVAL_S) * 1000;
+    this.queue = new ApiQueue(REQUEST_INTERVAL_MS);
 
     this.api.on('didFinishLaunching', () => {
       this.discoverDevices();
@@ -287,11 +306,24 @@ class GoveePlatform {
     this.log.debug(`${device.deviceName} ← ${name}:`, JSON.stringify(value));
   }
 
-  async goveeRequest(method, path, body = null) {
+  goveeRequest(method, path, body = null) {
+    return this.queue.add(() => this._requestWithRetry(method, path, body));
+  }
+
+  async _requestWithRetry(method, path, body) {
+    let rateLimitRetries = 0;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
         return await this._rawRequest(method, path, body);
       } catch (err) {
+        // Rate limited — wait exactly as long as Govee says, then retry
+        if (err.retryAfter !== undefined && rateLimitRetries < 2) {
+          rateLimitRetries++;
+          this.log.warn(`Rate limited by Govee API, waiting ${err.retryAfter}s...`);
+          await sleep((err.retryAfter + 1) * 1000);
+          attempt--; // don't consume a normal retry slot
+          continue;
+        }
         if (attempt === MAX_RETRIES) throw err;
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
         this.log.debug(`Request failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delay}ms:`, err.message);
@@ -320,6 +352,14 @@ class GoveePlatform {
         let raw = '';
         res.on('data', (chunk) => { raw += chunk; });
         res.on('end', () => {
+          // Handle rate limit before attempting JSON parse (response is plain text)
+          if (res.statusCode === 429) {
+            const match = raw.match(/retry in (\d+)/i);
+            const retryAfter = match ? parseInt(match[1]) : 60;
+            const err = new Error(`Rate limited by Govee API (retry in ${retryAfter}s)`);
+            err.retryAfter = retryAfter;
+            return reject(err);
+          }
           let parsed;
           try {
             parsed = JSON.parse(raw);
