@@ -17,7 +17,7 @@ const MAX_MIREDS = Math.floor(1000000 / MIN_KELVIN);  // ~370
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 const DEFAULT_POLL_INTERVAL_S = 30;
-const REQUEST_INTERVAL_MS = 200; // min gap between outgoing API requests
+const REQUEST_INTERVAL_MS = 600; // min gap between outgoing API requests (100 req/min limit)
 
 module.exports = (api) => {
   api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, GoveePlatform);
@@ -162,18 +162,22 @@ class GoveePlatform {
     service
       .getCharacteristic(Characteristic.On)
       .onGet(() => state.on)
-      .onSet(async (value) => {
-        await this.sendCommand(device, 'turn', value ? 'on' : 'off');
+      .onSet((value) => {
         state.on = !!value;
+        this.sendCommand(device, 'turn', value ? 'on' : 'off').catch((err) => {
+          this.log.error(`Failed to set power for ${device.deviceName}:`, err.message);
+        });
       });
 
     // --- Brightness ---
     service
       .getCharacteristic(Characteristic.Brightness)
       .onGet(() => state.brightness)
-      .onSet(async (value) => {
-        await this.sendCommand(device, 'brightness', value);
+      .onSet((value) => {
         state.brightness = value;
+        this.sendCommand(device, 'brightness', value).catch((err) => {
+          this.log.error(`Failed to set brightness for ${device.deviceName}:`, err.message);
+        });
       });
 
     // --- Hue ---
@@ -202,11 +206,13 @@ class GoveePlatform {
       .getCharacteristic(Characteristic.ColorTemperature)
       .setProps({ minValue: MIN_MIREDS, maxValue: MAX_MIREDS })
       .onGet(() => state.colorTemp)
-      .onSet(async (value) => {
+      .onSet((value) => {
         state.colorTemp = value;
         state.colorMode = false;
         const kelvin = Math.round(1000000 / value);
-        await this.sendCommand(device, 'colorTem', kelvin);
+        this.sendCommand(device, 'colorTem', kelvin).catch((err) => {
+          this.log.error(`Failed to set color temp for ${device.deviceName}:`, err.message);
+        });
       });
 
     // --- Adaptive Lighting ---
