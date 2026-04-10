@@ -17,7 +17,7 @@ const MAX_MIREDS = Math.floor(1000000 / MIN_KELVIN);  // ~370
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 const DEFAULT_POLL_INTERVAL_S = 30;
-const REQUEST_INTERVAL_MS = 600; // min gap between outgoing API requests (100 req/min limit)
+const REQUEST_INTERVAL_MS = 1000; // min gap between outgoing API requests (~60 req/min, safely under 100/min limit)
 
 module.exports = (api) => {
   api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, GoveePlatform);
@@ -28,15 +28,22 @@ class ApiQueue {
   constructor(intervalMs) {
     this.intervalMs = intervalMs;
     this._chain = Promise.resolve();
+    this.pending = 0;
   }
 
   add(fn) {
+    this.pending++;
     const result = this._chain
       .then(() => sleep(this.intervalMs))
       .then(fn);
+    result.finally(() => { this.pending--; });
     // Errors must not break the chain for subsequent requests
     this._chain = result.catch(() => {});
     return result;
+  }
+
+  get busy() {
+    return this.pending > 0;
   }
 }
 
@@ -246,6 +253,10 @@ class GoveePlatform {
   // ---------------------------------------------------------------------------
 
   async pollAllDevices() {
+    if (this.queue.busy) {
+      this.log.debug('Skipping poll — commands in flight');
+      return;
+    }
     for (const accessory of this.accessories.values()) {
       const device = accessory.context.device;
       if (!device) continue;
