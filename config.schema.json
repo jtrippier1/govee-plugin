@@ -1,0 +1,29 @@
+{
+  "pluginAlias": "GoveeH6008",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform Name",
+        "type": "string",
+        "default": "Govee H6008"
+      },
+      "apiKey": {
+        "title": "Govee API Key",
+        "type": "string",
+        "required": true,
+        "description": "Your Govee developer API key from the Govee Home app"
+      },
+      "pollInterval": {
+        "title": "Poll Interval (seconds)",
+        "type": "integer",
+        "default": 30,
+        "minimum": 10,
+        "maximum": 300,
+        "description": "How often to refresh device state from the API (10–300 seconds)"
+      }
+    }
+  }
+}
