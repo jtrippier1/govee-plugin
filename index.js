@@ -23,20 +23,26 @@ module.exports = (api) => {
   api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, GoveePlatform);
 };
 
-// Serializes API calls with a minimum interval between them to avoid rate limits.
+// Serializes API calls with a minimum interval between back-to-back requests.
+// If the queue is idle, the next request fires immediately with no delay.
 class ApiQueue {
   constructor(intervalMs) {
     this.intervalMs = intervalMs;
     this._chain = Promise.resolve();
+    this._lastCompleted = 0;
     this.pending = 0;
   }
 
   add(fn) {
     this.pending++;
-    const result = this._chain
-      .then(() => sleep(this.intervalMs))
-      .then(fn);
-    result.finally(() => { this.pending--; });
+    const result = this._chain.then(() => {
+      const wait = this.intervalMs - (Date.now() - this._lastCompleted);
+      return wait > 0 ? sleep(wait) : Promise.resolve();
+    }).then(fn);
+    result.finally(() => {
+      this._lastCompleted = Date.now();
+      this.pending--;
+    });
     // Errors must not break the chain for subsequent requests
     this._chain = result.catch(() => {});
     return result;
