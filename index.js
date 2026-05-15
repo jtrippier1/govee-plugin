@@ -39,10 +39,11 @@ class ApiQueue {
       const wait = this.intervalMs - (Date.now() - this._lastCompleted);
       return wait > 0 ? sleep(wait) : Promise.resolve();
     }).then(fn);
-    result.finally(() => {
+    const done = () => {
       this._lastCompleted = Date.now();
       this.pending--;
-    });
+    };
+    result.then(done, done); // handles both resolve and reject; avoids an unhandled rejection from .finally()
     // Errors must not break the chain for subsequent requests
     this._chain = result.catch(() => {});
     return result;
@@ -90,7 +91,9 @@ class GoveePlatform {
       const response = await this.goveeRequest('GET', '/');
       devices = response.data?.devices ?? [];
     } catch (err) {
-      this.log.error('Failed to fetch devices from Govee API:', err.message);
+      const retryDelay = err.retryAfter ?? 60;
+      this.log.error(`Failed to fetch devices from Govee API: ${err.message}. Retrying in ${retryDelay}s...`);
+      setTimeout(() => this.discoverDevices(), retryDelay * 1000);
       return;
     }
 
