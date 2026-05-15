@@ -85,15 +85,15 @@ class GoveePlatform {
     this.accessories.set(accessory.UUID, accessory);
   }
 
-  async discoverDevices() {
+  async discoverDevices(attempt = 0) {
     let devices;
     try {
       const response = await this.goveeRequest('GET', '/');
       devices = response.data?.devices ?? [];
     } catch (err) {
-      const retryDelay = err.retryAfter ?? 60;
-      this.log.error(`Failed to fetch devices from Govee API: ${err.message}. Retrying in ${retryDelay}s...`);
-      setTimeout(() => this.discoverDevices(), retryDelay * 1000);
+      const backoff = Math.min(60 * Math.pow(2, attempt), 3600); // 60s, 120s, 240s… cap at 1hr
+      this.log.error(`Failed to fetch devices from Govee API: ${err.message}. Retrying in ${backoff}s...`);
+      setTimeout(() => this.discoverDevices(attempt + 1), backoff * 1000);
       return;
     }
 
@@ -342,13 +342,16 @@ class GoveePlatform {
       try {
         return await this._rawRequest(method, path, body);
       } catch (err) {
-        // Rate limited — wait exactly as long as Govee says, then retry
-        if (err.retryAfter !== undefined && rateLimitRetries < 2) {
-          rateLimitRetries++;
-          this.log.warn(`Rate limited by Govee API, waiting ${err.retryAfter}s...`);
-          await sleep((err.retryAfter + 1) * 1000);
-          attempt--; // don't consume a normal retry slot
-          continue;
+        // Rate limited — wait exactly as long as Govee says, then retry once; give up after that
+        if (err.retryAfter !== undefined) {
+          if (rateLimitRetries < 1) {
+            rateLimitRetries++;
+            this.log.warn(`Rate limited by Govee API, waiting ${err.retryAfter}s...`);
+            await sleep((err.retryAfter + 1) * 1000);
+            attempt--; // don't consume a normal retry slot
+            continue;
+          }
+          throw err; // still rate limited after waiting — stop hammering the API
         }
         if (attempt === MAX_RETRIES) throw err;
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
